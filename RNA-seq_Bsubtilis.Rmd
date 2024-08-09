@@ -1,0 +1,507 @@
+---
+title: "RNA-seq of Bacillus subtilis in EXP phase and during sporulation"
+author: "Martin Převorovský, prevorov@natur.cuni.cz, http://www.GenoMik.cz"
+output: html_document
+---
+
+The main aims of this experiment are to:
+
+* identify genes whose expression levels change in response to presence/absence of *rpoE* (delta null) and *rpoE rpoZ/yloH* (delta omega null) in both exponential phase of growth and during sporulation
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rtracklayer)
+library(GenomicAlignments)
+library(GenomicFeatures)
+library(DESeq2)
+library(RColorBrewer)
+library(pheatmap)
+
+genome_dir <- './genome_Bsubtilis/'
+genome_annot <- paste0(genome_dir, 'Bsubtilis.gff')
+bam_dir <- './BAM_RNA-seq_Bsubtilis/'
+coverage_dir <- './coverage_RNA-seq_Bsubtilis/'
+deg_dir <- './DEG_RNA-seq_Bsubtilis/'
+image_dir <- './images_Bsubtilis/'
+```
+
+Variables for shell scripts are stored in the file "shell_variables_RNA-seq_Bsubtilis.sh" and can be modified as needed:
+
+```{bash list_variables}
+cat shell_variables_RNA-seq_Bsubtilis.sh
+```
+
+
+# *Bacillus subtilis* strain 168 genome sequence and annotation
+
+* genome sequence and annotation were downloaded from ftp://ftp.ncbi.nlm.nih.gov/genomes/refseq/bacteria/Bacillus_subtilis/reference/GCF_000009045.1_ASM904v1/ (downloaded `r date()`)
+
+```{bash, message=FALSE, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+mkdir -p "${genome_dir}"
+wget -N --no-verbose --directory-prefix="${genome_dir}" ftp://ftp.ncbi.nlm.nih.gov/genomes/refseq/bacteria/Bacillus_subtilis/reference/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.fna.gz
+zcat `ls "${genome_dir}"* | grep fna.gz$` > "${genome/\.fasta/_no_spikes\.fasta}"
+cat "${genome/\.fasta/_no_spikes\.fasta}" ./spikes_4.fasta > "${genome}"
+
+samtools faidx "${genome}"
+cut -f1,2 "${genome}.fai" > "${genome_dir}chrom.sizes"
+
+wget -N --no-verbose --directory-prefix="${genome_dir}" ftp://ftp.ncbi.nlm.nih.gov/genomes/refseq/bacteria/Bacillus_subtilis/reference/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.gff.gz
+zcat `ls "${genome_dir}"* | grep gff.gz$` > "${genome_annot}"
+```
+
+
+# QC of raw sequence reads
+
+* Libraries were sequenced at the Institute of Molecular Genetics, Czech Academy of Sciences, Prague (Illumina NextSeq 550).
+
+* Technical quality of library construction and sequencing run was tested using `fastQC`.
+
+```{bash}
+fastqc --version
+multiqc --version
+```
+
+```{bash, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+mkdir -p "${QC_dir}"
+mapfile -t fastq_files < <(ls -1 "${fastq_dir}" | grep "${fastq_file_ext}")
+for i in ${fastq_files[@]};
+do
+  fastqc --quiet --outdir "${QC_dir}" --threads "${CPU}" "${fastq_dir}${i}"
+done
+
+multiqc -f -m fastqc -i RNA-seq_Bsubtilis -o "${QC_dir}" "${QC_dir}"
+```
+
+Results of QC:
+
+* 86 nt SE reads
+
+* 7.4-15.6 M reads per sample
+
+* read quality scores somewhat deteriorate at the end → 3' end trimming of reads is needed
+
+* all samples give error on per base sequence content (due to random priming)
+
+* 4 samples give warning on per sequence GC content (could be due to very high expression of some RNAs in stationary phase)
+
+* all samples give error on high read duplication levels (normal and OK for transcriptome analysis)
+
+* all samples give error/warning on overrepresented sequences
+
+* no adapter contamination
+
+
+# Read trimming
+
+* trim parts of the reads where average base quality in a 4 nt window drops below 20
+
+* only keep trimmed reads that are at least 20 nt long
+
+* adapter trimming not needed
+
+```{bash}
+java -jar /opt/Trimmomatic-0.39/trimmomatic-0.39.jar -version
+```
+
+```{bash, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+mkdir -p "${fastq_trim_dir}"
+mapfile -t fastq_files < <(ls -1 "${fastq_dir}" | grep "${fastq_file_ext}")
+for i in ${fastq_files[@]};
+do
+  java -jar /opt/Trimmomatic-0.39/trimmomatic-0.39.jar SE -phred33 -threads "${CPU}" "${fastq_dir}${i}" "${fastq_trim_dir}${i}.trim.fastq.gz" SLIDINGWINDOW:4:20 MINLEN:20
+done
+```
+
+
+# QC of quality-trimmed sequence reads
+
+Effects of trimming were determined by `fastQC`.
+
+```{bash, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+mkdir -p "${QC_trim_dir}"
+mapfile -t fastq_files < <(ls -1 "${fastq_trim_dir}" | grep "${fastq_file_ext}")
+for i in ${fastq_files[@]};
+do
+  fastqc --quiet --outdir "${QC_trim_dir}" --threads "${CPU}" "${fastq_trim_dir}${i}"
+done
+
+multiqc -f -m fastqc -i RNA-seq_Bsubtilis_trimmed -o "${QC_trim_dir}" "${QC_trim_dir}"
+```
+  
+Results of QC:
+
+* dropped ~2% of reads
+
+* 20-86 nt reads (vast majority of reads are >82 nt)
+
+* read quality scores now OK
+
+
+# Read mapping into *B. subtilis* genome
+
+```{bash}
+hisat2 --version
+samtools --version
+```
+
+```{bash, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+# build HISAT2 index
+hisat2-build --quiet -p "${CPU}" "${genome}" "${genome}"
+
+# map
+mkdir -p "${bam_dir}"
+mapfile -t fastq_files < <(ls -1 "${fastq_trim_dir}" | grep "${fastq_file_ext}")
+for i in ${fastq_files[@]};
+do
+	infile="${fastq_trim_dir}${i}"
+	outfile="${bam_dir}${i}.bam"
+  echo "${outfile}"
+	hisat2 -x "${genome}" -U "${infile}" --threads "${CPU}" --no-spliced-alignment -k 10 --summary-file "${outfile}.log" | samtools view -b -F 256 --threads "${CPU}" - | samtools sort --threads "${CPU}" -o "${outfile}" - 
+	samtools index "${outfile}"
+	samtools view -c --threads "${CPU}" "${outfile}"
+done
+```
+
+Notes
+
+* To properly map reads coming from repeat regions (e.g., rRNA), HISAT was set to search for up to 10 matching positions, then only the best (marked as primary by HISAT) alignment was kept.
+
+	* **The kit used for sequencing library preparation produces reads that are reverse-complement to the original RNA sequence. Therefore, reads map to the opposite strand compared to the corresponding gene's orientation. This needs to be accounted for during count table generation (reads are reversed) and generation of strand-specific BAM and BigWig files (plus-strand reads are used for computing real minus-strand coverage, and vice versa).**
+	
+* Mapping rate >92%.
+
+
+# Create genome coverage files for each sample 
+
+* Note that strand polarity is swapped during the calculation (sequencing libraries are reverse-complement of the original RNA).
+
+```{bash}
+deeptools --version
+```
+
+```{bash, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+mkdir -p "${coverage_dir}"
+mapfile -t bam_files < <(ls -1 "${bam_dir}" | grep "\.bam$")
+for i in ${!bam_files[@]};
+do
+  scaling_factor=`samtools idxstats "${bam_dir}${bam_files[${i}]}" | head -n 5 | cut -f3 | paste -s -d+ | bc`
+  scaling_factor=`echo "scale=6; 1/(${scaling_factor}/1000000)" | bc`
+	input_file="${bam_dir}${bam_files[${i}]}"
+	bamCoverage --binSize "${bin_size}" -p "${CPU}" --bam "${input_file}" -o "${coverage_dir}${bam_files[${i}]}.bw" --scaleFactor "${scaling_factor}"
+	bamCoverage --binSize "${bin_size}" -p "${CPU}" --bam "${input_file}" -o "${coverage_dir}${bam_files[${i}]}.plus.bw" --scaleFactor "${scaling_factor}" --samFlagInclude 16
+	scaling_factor=`echo "${scaling_factor}*-1" | bc`
+	bamCoverage --binSize "${bin_size}" -p "${CPU}" --bam "${input_file}" -o "${coverage_dir}${bam_files[${i}]}.minus.bw" --scaleFactor "${scaling_factor}" --samFlagExclude 16
+done
+
+# average coverage tracks across biological replicates
+mapfile -t bw_files < <(ls -1 "${coverage_dir}" | grep "\.bam\.bw$" | grep -v "BsU-wt-STAT-3B_S41" | sort -V)
+samples=("KOdw_EXP" "KOdw_STAT" "KOd_EXP" "KOd_STAT" "WT_EXP" "WT_STAT")
+for i in {0..23..4};
+do
+  z=$((i/4))
+  wiggletools mean "${coverage_dir}${bw_files[${i}]}" "${coverage_dir}${bw_files[${i}+1]}" "${coverage_dir}${bw_files[${i}+2]}" "${coverage_dir}${bw_files[${i}+3]}" | wigToBigWig stdin "${genome_dir}chrom.sizes" "${coverage_dir}${samples[${z}]}.mean.bw"
+done
+```
+
+Notes
+
+* Checked all samples visually in IGV -> OK, *rpoE* and *rpoZ* genotypes are correct.
+
+* Sample coverage profiles form coherent groups (EXP vs STAT) with these outliers: "BsU-KOdw-EXP-1_S25", "BsU-wt-EXP-1_S23".
+
+* rRNA reads negligible (with the exception of sample "BsU-wt-STAT-3B_S41").
+
+
+# Determine rRNA content
+
+```{bash, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+rRNA=`tail -n +2 rRNA_genes_Bsubtilis.txt | cut -f 5`
+
+bam_files=( $(ls -1 -d "${bam_dir}"* | grep "\.bam$") )
+
+echo -e "file\tall\tmapped\tunmapped\trRNA\tother_mapped" > rRNA_read_counts_Bsubtilis
+for i in ${bam_files[@]};
+do
+  all_reads=`samtools view -c "${i}"`
+  mapped_reads=`samtools view -c -F 4 "${i}"`
+  unmapped_reads=`samtools view -c -f 4 "${i}"`
+  rRNA_reads=`echo "${rRNA}" | xargs samtools view -c "${i}"`
+  other_mapped_reads=`echo "${mapped_reads}-${rRNA_reads}" | bc`
+  echo -e "${i/$bam_dir/}\t${all_reads}\t${mapped_reads}\t${unmapped_reads}\t${rRNA_reads}\t${other_mapped_reads}" >> rRNA_read_counts_Bsubtilis
+done
+```
+
+* Ribodepletion was excellent, rRNA content among mapped reads is below 1%. Only sample "BsU-wt-STAT-3B_S41" has ~15% of rRNA!
+
+
+# Determine spike-in content
+
+```{bash, eval=TRUE}
+source shell_variables_RNA-seq_Bsubtilis.sh
+
+spikes=("Plat" "Mos" "Elav2" "Nluc")
+
+bam_files=( $(ls -1 -d "${bam_dir}"* | grep "\.bam$") )
+
+echo -e "file\tall\tmapped\tunmapped\tspikes\tother_mapped" > spike-in_read_counts_Bsubtilis
+for i in ${bam_files[@]};
+do
+  all_reads=`samtools view -c "${i}"`
+  mapped_reads=`samtools view -c -F 4 "${i}"`
+  unmapped_reads=`samtools view -c -f 4 "${i}"`
+  spike_reads=`samtools view -c "${i}" "${spikes[@]}"`
+  other_mapped_reads=`echo "${mapped_reads}-${spike_reads}" | bc`
+  echo -e "${i/$bam_dir/}\t${all_reads}\t${mapped_reads}\t${unmapped_reads}\t${spike_reads}\t${other_mapped_reads}" >> spike-in_read_counts_Bsubtilis
+done
+```
+
+* Spike-in content is ~5-9% in EXP samples and ~14-20% in STAT samples (just 2.9% in "BsU-wt-STAT-3B_S41"). But spike-in content is ~2.5-3.7x lower in samples from replicate 4.
+
+
+# Create count tables of all genes
+
+```{r, eval=TRUE}
+gff <- import.gff3(genome_annot)
+gff.genes <- gff[gff$type == 'gene', ]
+
+sample_info <- read.delim('sampleInfo_RNA-seq_Bsubtilis', stringsAsFactors = FALSE, header = TRUE, sep = '\t')
+sample_info[, 'cultivation_run'] <- factor(sample_info[, 'cultivation_run'])
+sample_info[, 'genotype'] <- factor(sample_info[, 'genotype'])
+sample_info[, 'phase'] <- factor(sample_info[, 'phase'])
+
+bam <- BamFileList(list.files(bam_dir, 
+                              pattern = '\\.bam$', 
+                              full.names = TRUE),
+                   asMates = FALSE,
+                   yieldSize = 1000000)
+names(bam) <- sample_info$sample_ID
+
+se <- summarizeOverlaps(features = gff.genes,
+                        reads = bam,
+                        mode = 'Union',
+                        singleEnd = TRUE,
+                        ignore.strand = FALSE,
+                        preprocess.reads = invertStrand)
+rownames(se) <- gff.genes$locus_tag
+colData(se) <- cbind(colData(se), sample_info)
+#save(file = 'se_RNA-seq_Bsubtilis.rda', se)
+#load('se_RNA-seq_Bsubtilis.rda')
+
+# normalize to get TPM values (transcripts per million)
+counts <- assay(se)
+gene_widths <- width(gff.genes)
+counts.norm <- counts
+for (i in 1:nrow(counts.norm)){
+  counts.norm[i, ] <- counts.norm[i, ] / gene_widths[i]
+}
+count_sums <- colSums(counts.norm) / 1000000
+for (i in 1:length(count_sums)){
+  counts.norm[, i] <- counts.norm[, i] / count_sums[i]
+}
+
+counts <- cbind(gff.genes$Name, counts)
+counts.norm <- cbind(gff.genes$Name, counts.norm)
+colnames(counts)[1] <- 'gene_name'
+colnames(counts.norm)[1] <- 'gene_name'
+write.csv(counts, file ='counts_RNA-seq_Bsubtilis.csv', quote = FALSE)
+write.csv(counts.norm, file ='counts_RNA-seq.TPM-normalized_Bsubtilis.csv', quote = FALSE)
+rm(gene_widths, count_sums)
+```
+
+
+## QC of count table data
+
+```{r, eval=TRUE}
+dir.create(image_dir, showWarnings = FALSE)
+
+dds <- DESeqDataSet(se, 
+                    design = ~ cultivation_run + 
+                      genotype +
+                      phase)
+dds <- DESeq(dds)
+rld <- rlog(dds, blind = FALSE)
+
+sampleDists <- dist(t(assay(rld)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- rld$sample_ID
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+pdf(paste0(image_dir, 'heatmap_RNA-seq_sampleDist_rlog_Bsubtilis.pdf'))
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+dev.off()
+
+pdf(paste0(image_dir, 'PCA_RNA-seq_rlog_Bsubtilis.pdf'))
+plotPCA(rld, intgroup = c('genotype', 'phase', 'cultivation_run'))
+plotPCA(rld, intgroup = 'genotype')
+plotPCA(rld, intgroup = 'phase')
+plotPCA(rld, intgroup = 'cultivation_run')
+dev.off()
+```
+
+* Heatmap results - samples cluster strongly by growth phase, as expected. STAT phase samples also cluster by genotype, EXP samples do not.
+
+* PCA results - EXP samples form one cluster, STAT samples form 3 clusters by genotype.
+
+
+# Extract operon and Sigma regulon information
+
+```{r, eval=TRUE}
+regulons <- read.delim('regulons', header = TRUE, stringsAsFactors = FALSE)
+sigmas <- unique(regulons$regulator.name)
+
+reg <- cbind(data.frame(gene_name = counts[, "gene_name"]), 
+             matrix(data = FALSE, 
+                    nrow = nrow(counts), 
+                    ncol = length(sigmas)))
+colnames(reg)[-1] <- sigmas
+
+for (i in sigmas){
+  regulons.temp <- regulons[regulons$regulator.name == i, 'gene.locus']
+  reg[which(rownames(reg) %in% regulons.temp), i] <- TRUE
+}
+rm(regulons.temp)
+
+reg$operon <- NA
+operons <- read.csv('operons-2022-10-12.csv')
+for (i in 1:nrow(operons)){
+  operon.temp <- unlist(strsplit(operons[i, 2], split = ']]-[[', fixed = TRUE))
+  operon.temp <- gsub('\\[|\\]|gene\\|', '', operon.temp)
+  reg[which(reg$gene_name %in% operon.temp), 'operon'] <- operons[i, 1]
+}
+rm(operon.temp)
+```
+
+
+# DEG calling
+
+```{r, eval=TRUE}
+# Benjamini-Hochberg p value adjustment (FDR)
+padj_threshold <- 0.05
+
+dir.create(deg_dir, recursive = TRUE)
+
+se <- se[, -which(colnames(se) == 'WT_STAT_3B')] # remove a redundant technical replicate
+
+# EXP
+# delta_KO-EXP vs WT-EXP
+dds <- DESeqDataSet(se, design = ~ cultivation_run + genotype)
+dds <- dds[, dds$phase == 'EXP'] # remove STAT samples
+dds <- dds[, dds$genotype != 'KOdw'] # remove double KO samples
+dds$phase <- droplevels(dds$phase) # remove factor levels without samples
+dds$genotype <- droplevels(dds$genotype)
+dds$genotype <- relevel(dds$genotype, ref = 'WT') # change order of factor levels to get KO/WT fold change (= define the reference)
+dds <- DESeq(dds)
+res <- results(dds, alpha = padj_threshold)
+summary(res[res$padj <= padj_threshold & !is.na(res$padj), ])
+res <- cbind(reg, res)
+write.csv(res, file = paste0(deg_dir, 'DESeq2results_delta-EXP_vs_WT-EXP.csv'), quote = FALSE)
+res.sig <- res[which(res$padj <= padj_threshold), ]
+res.sig <- res.sig[order(res.sig$log2FoldChange), ]
+write.csv(res.sig, file = paste0(deg_dir, 'DESeq2results_delta-EXP_vs_WT-EXP.SIG.csv'), quote = FALSE)
+
+# delta_omega_KO-EXP vs WT-EXP
+dds <- DESeqDataSet(se, design = ~ cultivation_run + genotype)
+dds <- dds[, dds$phase == 'EXP'] # remove STAT samples
+dds <- dds[, dds$genotype != 'KOd'] # remove single KO samples
+dds$phase <- droplevels(dds$phase) # remove factor levels without samples
+dds$genotype <- droplevels(dds$genotype)
+dds$genotype <- relevel(dds$genotype, ref = 'WT') # change order of factor levels to get KO/WT fold change (= define the reference)
+dds <- DESeq(dds)
+res <- results(dds, alpha = padj_threshold)
+summary(res[res$padj <= padj_threshold & !is.na(res$padj), ])
+res <- cbind(reg, res)
+write.csv(res, file = paste0(deg_dir, 'DESeq2results_delta_omega-EXP_vs_WT-EXP.csv'), quote = FALSE)
+res.sig <- res[which(res$padj <= padj_threshold), ]
+res.sig <- res.sig[order(res.sig$log2FoldChange), ]
+write.csv(res.sig, file = paste0(deg_dir, 'DESeq2results_delta_omega-EXP_vs_WT-EXP.SIG.csv'), quote = FALSE)
+
+# delta_omega_KO-EXP vs delta_KO-EXP
+dds <- DESeqDataSet(se, design = ~ cultivation_run + genotype)
+dds <- dds[, dds$phase == 'EXP'] # remove STAT samples
+dds <- dds[, dds$genotype != 'WT'] # remove WT samples
+dds$phase <- droplevels(dds$phase) # remove factor levels without samples
+dds$genotype <- droplevels(dds$genotype)
+dds$genotype <- relevel(dds$genotype, ref = 'KOd') # change order of factor levels to get KOdw/KOd fold change (= define the reference)
+dds <- DESeq(dds)
+res <- results(dds, alpha = padj_threshold)
+summary(res[res$padj <= padj_threshold & !is.na(res$padj), ])
+res <- cbind(reg, res)
+write.csv(res, file = paste0(deg_dir, 'DESeq2results_delta_omega-EXP_vs_delta-EXP.csv'), quote = FALSE)
+res.sig <- res[which(res$padj <= padj_threshold), ]
+res.sig <- res.sig[order(res.sig$log2FoldChange), ]
+write.csv(res.sig, file = paste0(deg_dir, 'DESeq2results_delta_omega-EXP_vs_delta-EXP.SIG.csv'), quote = FALSE)
+
+
+# STAT
+# delta_KO-STAT vs WT-STAT
+dds <- DESeqDataSet(se, design = ~ cultivation_run + genotype)
+dds <- dds[, dds$phase == 'STAT'] # remove EXP samples
+dds <- dds[, dds$genotype != 'KOdw'] # remove double KO samples
+dds$phase <- droplevels(dds$phase) # remove factor levels without samples
+dds$genotype <- droplevels(dds$genotype)
+dds$genotype <- relevel(dds$genotype, ref = 'WT') # change order of factor levels to get KO/WT fold change (= define the reference)
+dds <- DESeq(dds)
+res <- results(dds, alpha = padj_threshold)
+summary(res[res$padj <= padj_threshold & !is.na(res$padj), ])
+res <- cbind(reg, res)
+write.csv(res, file = paste0(deg_dir, 'DESeq2results_delta-STAT_vs_WT-STAT.csv'), quote = FALSE)
+res.sig <- res[which(res$padj <= padj_threshold), ]
+res.sig <- res.sig[order(res.sig$log2FoldChange), ]
+write.csv(res.sig, file = paste0(deg_dir, 'DESeq2results_delta-STAT_vs_WT-STAT.SIG.csv'), quote = FALSE)
+
+# delta_omega_KO-STAT vs WT-STAT
+dds <- DESeqDataSet(se, design = ~ cultivation_run + genotype)
+dds <- dds[, dds$phase == 'STAT'] # remove EXP samples
+dds <- dds[, dds$genotype != 'KOd'] # remove single KO samples
+dds$phase <- droplevels(dds$phase) # remove factor levels without samples
+dds$genotype <- droplevels(dds$genotype)
+dds$genotype <- relevel(dds$genotype, ref = 'WT') # change order of factor levels to get KO/WT fold change (= define the reference)
+dds <- DESeq(dds)
+res <- results(dds, alpha = padj_threshold)
+summary(res[res$padj <= padj_threshold & !is.na(res$padj), ])
+res <- cbind(reg, res)
+write.csv(res, file = paste0(deg_dir, 'DESeq2results_delta_omega-STAT_vs_WT-STAT.csv'), quote = FALSE)
+res.sig <- res[which(res$padj <= padj_threshold), ]
+res.sig <- res.sig[order(res.sig$log2FoldChange), ]
+write.csv(res.sig, file = paste0(deg_dir, 'DESeq2results_delta_omega-STAT_vs_WT-STAT.SIG.csv'), quote = FALSE)
+
+# delta_omega_KO-STAT vs delta_KO-STAT
+dds <- DESeqDataSet(se, design = ~ cultivation_run + genotype)
+dds <- dds[, dds$phase == 'STAT'] # remove EXP samples
+dds <- dds[, dds$genotype != 'WT'] # remove WT samples
+dds$phase <- droplevels(dds$phase) # remove factor levels without samples
+dds$genotype <- droplevels(dds$genotype)
+dds$genotype <- relevel(dds$genotype, ref = 'KOd') # change order of factor levels to get KOdw/KOd fold change (= define the reference)
+dds <- DESeq(dds)
+res <- results(dds, alpha = padj_threshold)
+summary(res[res$padj <= padj_threshold & !is.na(res$padj), ])
+res <- cbind(reg, res)
+write.csv(res, file = paste0(deg_dir, 'DESeq2results_delta_omega-STAT_vs_delta-STAT.csv'), quote = FALSE)
+res.sig <- res[which(res$padj <= padj_threshold), ]
+res.sig <- res.sig[order(res.sig$log2FoldChange), ]
+write.csv(res.sig, file = paste0(deg_dir, 'DESeq2results_delta_omega-STAT_vs_delta-STAT.SIG.csv'), quote = FALSE)
+```
+
+
+***
+
+```{r}
+sessionInfo()
+```

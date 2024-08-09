@@ -1,0 +1,27 @@
+sample_ID	bam_file	cultivation_run	genotype	phase
+KOd_EXP_1	BsU-KOd-EXP-1_S24_merged_R1_001.fastq.gz.trim.fastq.gz.bam	1	KOd	EXP
+KOd_EXP_2	BsU-KOd-EXP-2_S30_merged_R1_001.fastq.gz.trim.fastq.gz.bam	2	KOd	EXP
+KOd_EXP_3	BsU-KOd-EXP-3_S36_merged_R1_001.fastq.gz.trim.fastq.gz.bam	3	KOd	EXP
+KOd_EXP_4	BsU-KOd-EXP-4_S42_merged_R1_001.fastq.gz.trim.fastq.gz.bam	4	KOd	EXP
+KOd_STAT_1	BsU-KOd-STAT-1_S27_merged_R1_001.fastq.gz.trim.fastq.gz.bam	1	KOd	STAT
+KOd_STAT_2	BsU-KOd-STAT-2_S33_merged_R1_001.fastq.gz.trim.fastq.gz.bam	2	KOd	STAT
+KOd_STAT_3	BsU-KOd-STAT-3_S39_merged_R1_001.fastq.gz.trim.fastq.gz.bam	3	KOd	STAT
+KOd_STAT_4	BsU-KOd-STAT-4_S45_merged_R1_001.fastq.gz.trim.fastq.gz.bam	4	KOd	STAT
+KOdw_EXP_1	BsU-KOdw-EXP-1_S25_merged_R1_001.fastq.gz.trim.fastq.gz.bam	1	KOdw	EXP
+KOdw_EXP_2	BsU-KOdw-EXP-2_S31_merged_R1_001.fastq.gz.trim.fastq.gz.bam	2	KOdw	EXP
+KOdw_EXP_3	BsU-KOdw-EXP-3_S37_merged_R1_001.fastq.gz.trim.fastq.gz.bam	3	KOdw	EXP
+KOdw_EXP_4	BsU-KOdw-EXP-4_S43_merged_R1_001.fastq.gz.trim.fastq.gz.bam	4	KOdw	EXP
+KOdw_STAT_1	BsU-KOdw-STAT-1_S28_merged_R1_001.fastq.gz.trim.fastq.gz.bam	1	KOdw	STAT
+KOdw_STAT_2	BsU-KOdw-STAT-2_S34_merged_R1_001.fastq.gz.trim.fastq.gz.bam	2	KOdw	STAT
+KOdw_STAT_3	BsU-KOdw-STAT-3_S40_merged_R1_001.fastq.gz.trim.fastq.gz.bam	3	KOdw	STAT
+KOdw_STAT_4	BsU-KOdw-STAT-4_S46_merged_R1_001.fastq.gz.trim.fastq.gz.bam	4	KOdw	STAT
+WT_EXP_1	BsU-wt-EXP-1_S23_merged_R1_001.fastq.gz.trim.fastq.gz.bam	1	WT	EXP
+WT_EXP_2	BsU-wt-EXP-2_S29_merged_R1_001.fastq.gz.trim.fastq.gz.bam	2	WT	EXP
+WT_EXP_3	BsU-wt-EXP-3_S35_merged_R1_001.fastq.gz.trim.fastq.gz.bam	3	WT	EXP
+WT_EXP_4	BsU-wt-EXP-4_S19_merged_R1_001.fastq.gz.trim.fastq.gz.bam	4	WT	EXP
+WT_STAT_1	BsU-wt-STAT-1_S26_merged_R1_001.fastq.gz.trim.fastq.gz.bam	1	WT	STAT
+WT_STAT_2	BsU-wt-STAT-2_S32_merged_R1_001.fastq.gz.trim.fastq.gz.bam	2	WT	STAT
+WT_STAT_3B	BsU-wt-STAT-3B_S41_merged_R1_001.fastq.gz.trim.fastq.gz.bam	3	WT	STAT
+WT_STAT_3	BsU-wt-STAT-3_S38_merged_R1_001.fastq.gz.trim.fastq.gz.bam	3	WT	STAT
+WT_STAT_4	BsU-wt-STAT-4_S44_merged_R1_001.fastq.gz.trim.fastq.gz.bam	4	WT	STAT
+

@@ -1,0 +1,16 @@
+import(methods)
+import(AnnotationDbi)
+
+### Only put what is statically exported here. All the AnnObj instances
+### created at load time are dynamically exported (refer to R/zzz.R for
+### the details).
+export(
+    org.Bsubtilis.eg,
+    org.Bsubtilis.eg_dbconn,
+    org.Bsubtilis.eg_dbfile,
+    org.Bsubtilis.eg_dbschema,
+    org.Bsubtilis.eg_dbInfo,
+
+    org.Bsubtilis.egORGANISM
+)
+

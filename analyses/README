@@ -1,0 +1,14 @@
+Data and Code related to the analysis
+
+refZ_upstream       - data, code and environment related to analysis of refZ upstream region
+DESeq_all           - result data from DESeq2 analysis
+ORA                 - results from overrepresentation analysis by ClusterProfiler
+                      - use code withing with R_env.yaml conda environment
+venns               - venn diagrams from DE genes
+                      - use code withing with Python_env.yaml conda environment
+assign_sigma        - plots and sigma factor assignement based on subtiwiki 
+                      - use upset_plots.ipynb with Python_env.yaml conda environment
+
+make_overview.ipynb - draw heatmap of all genes 
+                      - use code with Python_env.yaml conda environment
+                    
